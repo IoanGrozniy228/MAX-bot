@@ -1,54 +1,24 @@
-using Gems.Sales.WebhookLogger.Bot;
-using Gems.Sales.WebhookLogger.Models;
-using Gems.Sales.WebhookLogger.UseCases.NotifyTaggedUsers;
-using MAX.Bot.Extensions;
-using MediatR;
-using Microsoft.AspNetCore.Mvc;
 using Serilog;
-using Winton.Extensions.Configuration.Consul;
 
 var builder = WebApplication.CreateBuilder(args);
-
-//Настройка MediatR
-builder.Services.AddMediatR(cfg => {
-    cfg.RegisterServicesFromAssembly(typeof(Program).Assembly);
-});
-
-// Настройка Serilog из конфигурации
-builder.Host.UseSerilog((context, services, configuration) =>
-{
-    configuration.ReadFrom.Configuration(context.Configuration);
-});
-
-//Привязка конфигурации к классу для user's id
-builder.Services.Configure<UsersMapOptions>(builder.Configuration.GetSection(UsersMapOptions.SectionName));
-
-//Проверка наличия токена
-var botToken = Environment.GetEnvironmentVariable("BOT_TOKEN") ?? throw new Exception("Токен бота не найден");
-Log.Information("Токен бота найден");
-builder.Services.AddMaxBotClient(botToken);
-builder.Services.AddScoped<IMessenger, MaxMessenger>();
-//Настройка для Consul
-builder.Configuration.AddConsul("Gems.Sales.BitrixNotifier/appsettings.json", options => {
-        options.ConsulConfigurationOptions = cco => {
-            cco.Address = new Uri("http://localhost:8500");
-        };
-    options.ReloadOnChange = true;
-    options.PollWaitTime = TimeSpan.FromSeconds(30);
-});
-
-//builder.Services.AddHostedService<BotHostedService>();  !НУЖЕН ТОКЕН ДЛЯ ЗАПУСКА!
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 	app.MapOpenApi();
-app.MapPost("/webhooks", async([FromBody] BitrixWebhookRequestDto request, ISender sender, CancellationToken cancellationToken) =>
-	{
-        var command = new NotifyTaggedUsersCommand(request.UserIds);
-        
-        await sender.Send(command, cancellationToken);
 
-        Results.Ok();
-    });
+Log.Logger = new LoggerConfiguration()
+	.WriteTo.Console()
+	.WriteTo.File("/var/log/gems/bitrix-notifier/webhooks.log")
+	.CreateLogger();
+
+app.MapPost("/webhooks", async (HttpRequest request) =>
+	{
+		request.EnableBuffering();
+
+		using var reader = new StreamReader(request.Body, leaveOpen: true);
+		var body = await reader.ReadToEndAsync();
+
+		Log.Logger.Information("{Body}", body);
+	});
 
 await app.RunAsync();
